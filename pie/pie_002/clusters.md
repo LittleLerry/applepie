@@ -152,7 +152,7 @@ Tensor parallelism does help reduce activation memory for the matrix multiplicat
 
 ![tpsp](./tp_sp_exp.png)
 
-With tensor parallelism alone, we had to store activations of shape `(b,s,h)` at various points. However, with sequence parallelism, the maximum activation size is reduced to $\frac{bsh}{\#tp}$ since we always either split along the sequence or the hidden dimension. By using sequence parallelism, we can achieve even greater activation memory savings, allowing us to push our batch size and sequence length further than would be possible with tensor parallelism alone.
+With tensor parallelism alone, we had to store activations of shape `(b,s,h)` at various points. However, with sequence parallelism, the maximum activation size is reduced to $\frac{bsh}{tp}$ since we always either split along the sequence or the hidden dimension. By using sequence parallelism, we can achieve even greater activation memory savings, allowing us to push our batch size and sequence length further than would be possible with tensor parallelism alone.
 
 > **Note:** Since LayerNorm layers in the SP region operate on different portions of the sequence, their gradients will differ across TP ranks. To ensure the weights stay synchronized, we need to all-reduce their gradients during the backward pass, similar to how DP ensures weights stay in sync. This is, however, a small communication overhead since LayerNorm has relatively few parameters.
 
