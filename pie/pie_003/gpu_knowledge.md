@@ -1,5 +1,5 @@
 # Stolen Training Knowledge
-The knowledge are **ALL stolen** from https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=landmark_llm_scaling_papers .
+The knowledge is **ALL stolen** from https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=landmark_llm_scaling_papers .
 ## A primer on GPUs
 Generally, GPUs have a very hierarchical organization. On the compute side, a GPU consists of an array of compute units called **streaming multiprocessors (SMs)**. Each SM contains and controls a set of **streaming processors**, also known as **cores**. For example, an NVIDIA H100 GPU has 132 SMs with 128 cores per SM, resulting in a total of 16,896 cores (see the docs for tensor cores for details), each capable of handling multiple threads simultaneously.
 
