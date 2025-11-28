@@ -1,0 +1,4 @@
+\beamer@sectionintoc {1}{What for?}{3}{0}{1}
+\beamer@sectionintoc {2}{Decoupling Representation and Classifier for Long-tailed Recognition}{5}{0}{2}
+\beamer@sectionintoc {3}{Long-Tail Learning via Logit Adjustment}{12}{0}{3}
+\beamer@sectionintoc {4}{Delving into Deep Imbalanced Regression (ICML Oral)}{27}{0}{4}
