@@ -39,11 +39,11 @@ class SFTDataset(Dataset):
 def parse_args():
     parser = argparse.ArgumentParser(description='sft')
 
-    parser.add_argument('--sft_data', type=str, default="/home/zzx/cs/assignment5-alignment/sft_data/baseline_gpt-oss-120b.jsonl")
-    parser.add_argument('--model_path', type=str, default="/home/zzx/models/Qwen/Qwen2.5-Math-1.5B")
+    parser.add_argument('--sft_data', type=str, default="/home/?/cs/assignment5-alignment/sft_data/baseline_gpt-oss-120b.jsonl")
+    parser.add_argument('--model_path', type=str, default="/home/?/models/Qwen/Qwen2.5-Math-1.5B")
     parser.add_argument('--epoch', type=int, default=0)
     parser.add_argument('--log_interval', type=int, default=8)
-    parser.add_argument('--sft_data_output', type=str, default="/home/zzx/cs/assignment5-alignment/sft_data/baseline_gpt-oss-120b_parsed.pt")
+    parser.add_argument('--sft_data_output', type=str, default="/home/?/cs/assignment5-alignment/sft_data/baseline_gpt-oss-120b_parsed.pt")
     parser.add_argument('--sft_ckpt_output_prefix', type=str, default="/mnt/GPU_10T/models/test_ckpt/")
     parser.add_argument('--gpus', type=int, default=4)
     parser.add_argument('--batch_size', type=int, default=8)
@@ -204,4 +204,5 @@ def main(args):
     train(args=args,engine=engine,optimizer=optimizer,trainloader=trainloader)
 
 if __name__ == "__main__":
+
     main(parse_args())
