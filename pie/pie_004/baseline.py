@@ -92,7 +92,7 @@ def parse_args():
     parser.add_argument('--obtain_sft_data', type=bool, default=False)
     parser.add_argument('--input_dataset', type=str, default="./data/gsm8k/test.jsonl")
     parser.add_argument('--input_prompt', type=str, default="./cs336_alignment/prompts/r1_zero.prompt")
-    parser.add_argument('--model_path', type=str, default="/home/zzx/models/Qwen/Qwen2.5-Math-1.5B")
+    parser.add_argument('--model_path', type=str, default="/home/?/models/Qwen/Qwen2.5-Math-1.5B")
 
     args = parser.parse_args()
     return args
@@ -107,7 +107,7 @@ def main(args):
     tensor_parallel_size = 1
     gpu_memory_utilization = 0.5
     # Example usage: CUDA_VISIBLE_DEVICES=devices TIKTOKEN_ENCODINGS_BASE=path/to/oss/encoder python baseline.py --obtain_sft_data True --input_dataset ./data/gsm8k/train.jsonl --model_path /mnt/GPU_10T/models/openai-mirror/gpt-oss-120b
-    # CUDA_VISIBLE_DEVICES=4,5,6,7 TIKTOKEN_ENCODINGS_BASE=/home/zzx/model_distillation/my_test/oss_encoder python baseline.py --obtain_sft_data True --input_dataset ./data/gsm8k/train.jsonl --model_path /mnt/GPU_10T/models/openai-mirror/gpt-oss-120b
+    # CUDA_VISIBLE_DEVICES=4,5,6,7 TIKTOKEN_ENCODINGS_BASE=/home/?/model_distillation/my_test/oss_encoder python baseline.py --obtain_sft_data True --input_dataset ./data/gsm8k/train.jsonl --model_path /mnt/GPU_10T/models/openai-mirror/gpt-oss-120b
     if(args.obtain_sft_data):
         devices = os.environ.get("CUDA_VISIBLE_DEVICES")
         if (devices is None):
@@ -123,4 +123,5 @@ def main(args):
     save_to_jsonl(q,a,g,r,f'./baseline_{model_name}.jsonl')
 
 if __name__ == "__main__":
+
     main(parse_args())
