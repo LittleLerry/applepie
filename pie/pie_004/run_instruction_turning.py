@@ -60,8 +60,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Instruction turning for llama3.1-8B')
     # dataset/conf related
     parser.add_argument('--model_path', type=str, default="/mnt/GPU_10T/models/meta-llama/Meta-Llama-3.1-8B")
-    parser.add_argument('--prompt_path', type=str, default="/home/zzx/cs/assignment5-alignment/cs336_alignment/prompts/alpaca_sft.prompt")
-    parser.add_argument('--dataset_path', type=str, default="/home/zzx/cs/assignment5-alignment/data/sft/train.jsonl")
+    parser.add_argument('--prompt_path', type=str, default="/home/?/cs/assignment5-alignment/cs336_alignment/prompts/alpaca_sft.prompt")
+    parser.add_argument('--dataset_path', type=str, default="/home/?/cs/assignment5-alignment/data/sft/train.jsonl")
     parser.add_argument('--ckpt_dir', type=str, default="/mnt/GPU_10T/models/test_ckpt/")
 
     parser.add_argument('--seq_len', type=int, default=512)
@@ -231,4 +231,5 @@ def main(args):
 
 if __name__ == "__main__":
     # deepspeed ./run_instruction_turning.py --deepspeed
+
     main(parse_args())
