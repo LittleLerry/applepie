@@ -13,7 +13,7 @@ import deepspeed
 from deepspeed.accelerator import get_accelerator
 
 class INSTDataset(Dataset):
-    def __init__(self, tokenizer, dataset_path, prompt_path, seq_length, shuffle, train_bs):
+    def __init__(self, tokenizer, dataset_path, prompt_path, seq_length, shuffle, train_bs, debug):
         if tokenizer.eos_token_id is None or tokenizer.bos_token_id is None:
             raise ValueError("No EOS/BOS token for this tokenizer.")
         self.eos = tokenizer.eos_token_id
@@ -28,6 +28,8 @@ class INSTDataset(Dataset):
             if shuffle:
                 import random
                 random.shuffle(self.dataset)
+            if debug:
+                self.dataset = self.dataset[:1000]
 
         self.seq_length = seq_length
             
@@ -63,9 +65,11 @@ def parse_args():
     parser.add_argument('--prompt_path', type=str, default="/home/?/cs/assignment5-alignment/cs336_alignment/prompts/alpaca_sft.prompt")
     parser.add_argument('--dataset_path', type=str, default="/home/?/cs/assignment5-alignment/data/sft/train.jsonl")
     parser.add_argument('--ckpt_dir', type=str, default="/mnt/GPU_10T/models/test_ckpt/")
+    parser.add_argument('--log', type=str, default="/home/?/cs/assignment5-alignment/cs336_alignment/log.txt")
 
     parser.add_argument('--seq_len', type=int, default=512)
     parser.add_argument('--shuffle', type=bool, default=False)
+    parser.add_argument('--debug', type=bool, default=False)
     # model related 
     parser.add_argument('--epoch', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=64)
@@ -111,12 +115,19 @@ def train(args,engine,optimizer,trainloader):
             # There is no mask for this dataloader, see the defination of class INSTDataset(Dataset)
             # get log probabilities given input_ids
             logits = engine(input_ids).logits
+            # print(f"***********logits:{logits.dtype}:\n{logits}\n")
+
             log_probs = logits - torch.logsumexp(logits, dim=-1,keepdim=True)
+            # print(f"***********log_probs:{log_probs.dtype}:\n{log_probs}\n")
             
             # get loss
             b, s = labels.shape
             negative_log_probs_of_labels = - log_probs[torch.arange(b)[:, None], torch.arange(s), labels]
+            # print(f"***********negative_log_probs_of_labels:{negative_log_probs_of_labels.dtype}:\n{negative_log_probs_of_labels}\n")
+
             per_seq_loss = negative_log_probs_of_labels.sum() / b
+
+            
             running_loss = running_loss + per_seq_loss
 
             # idiot backward
@@ -124,11 +135,15 @@ def train(args,engine,optimizer,trainloader):
             engine.step()
 
             if local_rank == 0 and i % args.log_interval == (args.log_interval - 1):
-                print(f"[{e + 1 : d}, {i + 1 : 5d}] loss: {running_loss / args.log_interval : .8f}")
+                s = f"[{e + 1 : d}, {i + 1 : 5d}] loss: {running_loss / args.log_interval : .8f}"
+                with open(args.log, "a") as f:
+                    f.write(s)
+                print(s)
                 running_loss = 0.0
 
         print(f"rank:{local_rank} saving after steps {steps}\n")
-        engine.save_checkpoint(save_dir=f"{args.ckpt_dir}{e}_{steps}ckpt")
+        if not args.debug:
+            engine.save_checkpoint(save_dir=f"{args.ckpt_dir}{e}_{steps}ckpt")
 
 
 def get_ds_config(args, total_steps):
@@ -163,9 +178,9 @@ def get_ds_config(args, total_steps):
         "gradient_clipping": 1.0,
         "prescale_gradients": False,
         # bf16 settings
-        "bf16": {
-            "enabled": True,
-        },
+        # "bf16": {
+        #     "enabled": True,
+        # },
 
         "wall_clock_breakdown": False, # ?
         "zero_optimization": {
@@ -202,7 +217,7 @@ def main(args):
     # torch.distributed.barrier()
     # get dataset
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    dataset = INSTDataset(tokenizer, args.dataset_path, args.prompt_path, args.seq_len, args.shuffle, args.batch_size)
+    dataset = INSTDataset(tokenizer, args.dataset_path, args.prompt_path, args.seq_len, args.shuffle, args.batch_size, args.debug)
     torch.distributed.barrier()
 
     assert len(dataset) % args.batch_size == 0
@@ -214,7 +229,7 @@ def main(args):
     # get model
     if torch.distributed.get_rank() == 0:
         print(f"Loading model and confs\n")
-    model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(args.model_path, dtype=torch.float32)
     ds_config = get_ds_config(args, total_steps)
 
     # launch engine
@@ -231,5 +246,4 @@ def main(args):
 
 if __name__ == "__main__":
     # deepspeed ./run_instruction_turning.py --deepspeed
-
     main(parse_args())
