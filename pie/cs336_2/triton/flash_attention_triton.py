@@ -1,0 +1,168 @@
+import torch
+import triton
+import triton.language as tl
+import torch
+
+@triton.jit
+def flash_fwd_kernel(
+    Q_ptr, K_ptr, V_ptr,
+    O_ptr, L_ptr,
+    stride_qb, stride_qq, stride_qd,
+    stride_kb, stride_kk, stride_kd,
+    stride_vb, stride_vk, stride_vd,
+    stride_ob, stride_oq, stride_od,
+    stride_lb, stride_lq,
+    N_QUERIES, N_KEYS,
+    scale,
+    D: tl.constexpr,
+    Q_TILE_SIZE: tl.constexpr,
+    K_TILE_SIZE: tl.constexpr,
+    ):
+
+    # block definitions
+    query_tile_index = tl.program_id(0)
+    batch_index = tl.program_id(1)
+
+    Q_block_ptr = tl.make_block_ptr(
+        Q_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES, D), # the shape of single batch: seq * d_k, seq = N_QUERIES, d_k = D
+        strides=(stride_qq, stride_qd), # define the strides of seq * d_k
+        offsets=(query_tile_index * Q_TILE_SIZE, 0), # within the batch, offset(element, element)
+        block_shape=(Q_TILE_SIZE, D),
+        order=(1, 0),
+    )
+
+    O_block_ptr = tl.make_block_ptr(
+        O_ptr + batch_index * stride_ob,
+        shape=(N_QUERIES, D), # the shape of single batch: seq * d_k, seq = N_QUERIES, d_k = D
+        strides=(stride_oq, stride_od), # define the strides of seq * d_k
+        offsets=(query_tile_index * Q_TILE_SIZE, 0), # within the batch, offset(element, element)
+        block_shape=(Q_TILE_SIZE, D),
+        order=(1, 0),
+    )
+
+    L_block_ptr = tl.make_block_ptr(
+        L_ptr + batch_index * stride_lb, # >>>>>>>>>>>>>>>>>>
+        shape=(N_QUERIES,), # the shape of single batch: seq
+        strides=(stride_lq,), # define the strides of seq
+        offsets=(query_tile_index * Q_TILE_SIZE,), # within the batch, offset(element,)
+        block_shape=(Q_TILE_SIZE,),
+        order=(0,),
+    )
+
+    K_block_ptr = tl.make_block_ptr(
+        K_ptr + batch_index * stride_kb,
+        shape=(N_KEYS, D), # the shape of single batch: seq * d_k, seq = N_QUERIES, d_k = D
+        strides=(stride_kk, stride_kd), # define the strides of seq * d_k
+        offsets=(0, 0), # within the batch, k starts from (0,0)
+        block_shape=(K_TILE_SIZE, D),
+        order=(1, 0),
+    ) # K_block_ptr = K_block_ptr.advance((K_TILE_SIZE,0))
+
+    V_block_ptr = tl.make_block_ptr(
+        V_ptr + batch_index * stride_vb,
+        shape=(N_KEYS, D), # the shape of single batch: seq * d_k, seq = N_QUERIES, d_k = D
+        strides=(stride_vk, stride_vd), # define the strides of seq * d_k
+        offsets=(0, 0), # within the batch, k starts from (0,0)
+        block_shape=(K_TILE_SIZE, D),
+        order=(1, 0),
+    ) # V_block_ptr = V_block_ptr.advance((K_TILE_SIZE,0))
+
+    # var definitions
+    loop = tl.cdiv(N_KEYS, K_TILE_SIZE)
+    q_i = tl.load(Q_block_ptr, boundary_check=(0,1,), padding_option="zero") # no need check for D, shape B_q * D 
+
+    # The on chip buffers should have dtype tl.float32. 
+    o_i = tl.zeros((Q_TILE_SIZE,D), dtype=tl.float32) # B_q * d
+    l_i = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32) # B_q
+    m_i = tl.full((Q_TILE_SIZE,), -float('inf') , dtype=tl.float32) # B_q
+
+    # flash attn fused kernel
+    for _ in range(loop):
+
+        k_j = tl.load(K_block_ptr, boundary_check=(0,1,), padding_option="zero") # no need check for D, shape B_k * D
+        v_j = tl.load(V_block_ptr, boundary_check=(0,1,), padding_option="zero") # no need check for D, shape B_k * D
+        
+        
+        s_i = tl.dot(q_i, k_j.trans()) * scale # B_q * B_k
+
+        updated_max = tl.maximum(tl.max(s_i, axis = -1), m_i) # B_q
+
+        p_i = tl.exp(s_i - updated_max[:,None]) # B_q * B_k
+
+        # update l_i and o_i 
+        _temp =  tl.exp(m_i - updated_max)
+        l_i =  _temp * l_i + tl.sum(p_i, axis = -1)
+
+        # tl.device_print("p_i:", p_i.shape)
+        # o_i = _temp[:,None] * o_i + tl.dot(p_i, v_j) # Input shapes should have M >= 1, N >= 1 and K >= 16
+        # p_i = p_i.tensor.to(v_j.tensor.dtype)
+        o_i = tl.dot(p_i, v_j, acc = _temp[:,None] * o_i)
+
+        # update max
+        m_i = updated_max
+
+        # move to next k,v block
+        K_block_ptr = K_block_ptr.advance((K_TILE_SIZE,0))
+        V_block_ptr = V_block_ptr.advance((K_TILE_SIZE,0))
+
+    inv_l_i = 1.0 / l_i
+
+    output = inv_l_i[:, None] * o_i
+    L_i = m_i + tl.log(l_i)
+
+    tl.store(O_block_ptr, output.to(O_block_ptr.type.element_ty), boundary_check=(0,)) # no need check for D
+    tl.store(L_block_ptr, L_i, boundary_check=(0,))
+
+def test():
+    import random
+    random.seed(0)
+    DEVICE = triton.runtime.driver.active.get_active_torch_device()
+    b = 10
+    seq = 512
+    d_k = 512
+    Q_TILE_SIZE = 16
+    K_TILE_SIZE = 16
+    std = 2.0
+    mean = 3.0
+    q = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
+    k = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
+    v = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
+    o = torch.empty(size=(b,seq,d_k), device=DEVICE, dtype=torch.float16).contiguous() 
+
+    v = v * std + mean
+
+    scale = 1 / 4
+    l = torch.empty(size=(b,seq,), dtype=torch.float32, device=DEVICE).contiguous()
+
+    #print(f"q:\n{q}")
+    #print(f"k:\n{k}")
+    #print(f"v:\n{v}")
+    print(f"q @ k.transpose(-2,-1) * scale:\n{(q @ k.transpose(-2,-1) * scale).max(dim=-1)}")
+
+    S = q @ k.transpose(-2,-1) * scale
+    A = S - torch.logsumexp(S,dim=-1,keepdim=True)
+    ref_o = (torch.exp(A) @ v).to(torch.float16)
+
+    flash_fwd_kernel[(seq // Q_TILE_SIZE, b)](q,k,v,o,l,
+                                              q.stride(0),q.stride(1),q.stride(2),
+                                              k.stride(0),k.stride(1),k.stride(2),
+                                              v.stride(0),v.stride(1),v.stride(2),
+                                              o.stride(0),o.stride(1),o.stride(2),
+                                              l.stride(0),l.stride(1),
+                                              N_QUERIES=seq, N_KEYS=seq, scale=scale, D=d_k, Q_TILE_SIZE=Q_TILE_SIZE, K_TILE_SIZE=K_TILE_SIZE)
+
+    print(f"o:\n{o.dtype}")
+    print(f"ref_o:\n{ref_o.dtype}")
+    print(f"MSE(o, ref_o):\n{torch.square(o - ref_o).sum()}")
+    print(f"AVG_SQER(o, ref_o):\n{torch.abs(o / ref_o - 1).mean()}")
+
+if __name__ == '__main__':
+    test()
+
+
+
+
+
+
+
