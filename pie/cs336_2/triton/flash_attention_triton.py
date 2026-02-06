@@ -71,7 +71,7 @@ def flash_fwd_kernel(
 
     # var definitions
     loop = tl.cdiv(N_KEYS, K_TILE_SIZE)
-    q_i = tl.load(Q_block_ptr, boundary_check=(0,1,), padding_option="zero") # no need check for D, shape B_q * D 
+    q_i = tl.load(Q_block_ptr, boundary_check=(0,), padding_option="zero") # no need check for D, shape B_q * D 
 
     # The on chip buffers should have dtype tl.float32. 
     o_i = tl.zeros((Q_TILE_SIZE,D), dtype=tl.float32) # B_q * d
@@ -83,6 +83,7 @@ def flash_fwd_kernel(
     # See: https://github.com/triton-lang/triton/issues/4574
     ASM: tl.constexpr = "cvt.rna.tf32.f32 $0, $1;" 
     # ------------------------------------------------------
+    assert Q_block_ptr.type.element_ty == K_block_ptr.type.element_ty and Q_block_ptr.type.element_ty == V_block_ptr.type.element_ty
 
     # flash attn fused kernel
     for _ in range(loop):
@@ -102,25 +103,26 @@ def flash_fwd_kernel(
         pack       : the number of elements to be processed by one instance of inline assembly
         """
         # quick transform
-        rounded_k_j = tl.inline_asm_elementwise(ASM, "=r, r", [k_j], dtype=tl.float32, is_pure=True, pack=1) if allow_tf32 else k_j
-        rounded_v_j = tl.inline_asm_elementwise(ASM, "=r, r", [v_j], dtype=tl.float32, is_pure=True, pack=1) if allow_tf32 else v_j
-        rounded_q_i = tl.inline_asm_elementwise(ASM, "=r, r", [q_i], dtype=tl.float32, is_pure=True, pack=1) if allow_tf32 else q_i
+        rounded_k_j = tl.inline_asm_elementwise(ASM, "=r, r", [k_j], dtype=tl.float32, is_pure=True, pack=1) if (allow_tf32 and k_j.dtype == tl.float32) else k_j
+        rounded_v_j = tl.inline_asm_elementwise(ASM, "=r, r", [v_j], dtype=tl.float32, is_pure=True, pack=1) if (allow_tf32 and v_j.dtype == tl.float32) else v_j
+        rounded_q_i = tl.inline_asm_elementwise(ASM, "=r, r", [q_i], dtype=tl.float32, is_pure=True, pack=1) if (allow_tf32 and q_i.dtype == tl.float32) else q_i
 
-        s_i = tl.dot(rounded_q_i, rounded_k_j.trans(), allow_tf32=allow_tf32) * scale # B_q * B_k
+
+        s_i = tl.dot(rounded_q_i, rounded_k_j.trans(), allow_tf32 = allow_tf32) * scale # B_q * B_k
         # tl.device_print("s_i:", s_i)
         
         updated_max = tl.maximum(tl.max(s_i, axis = -1), m_i) # B_q
 
-        p_i = tl.exp(s_i - updated_max[:,None]).to(s_i.dtype) # B_q * B_k
+        p_i = tl.exp(s_i - updated_max[:,None]) # B_q * B_k
 
         # update l_i and o_i 
         _temp =  tl.exp(m_i - updated_max)
 
         l_i =  _temp * l_i + tl.sum(p_i, axis = -1)
 
-        rounded_p_i = tl.inline_asm_elementwise(ASM, "=r, r", [p_i], dtype=tl.float32, is_pure=True, pack=1) if allow_tf32 else p_i
+        rounded_p_i = tl.inline_asm_elementwise(ASM, "=r, r", [p_i], dtype=tl.float32, is_pure=True, pack=1) if (allow_tf32 and p_i.dtype == tl.float32) else p_i
 
-        o_i = tl.dot(rounded_p_i, rounded_v_j, acc = _temp[:,None] * o_i,allow_tf32=allow_tf32)
+        o_i = tl.dot(rounded_p_i.to(rounded_v_j.dtype), rounded_v_j, acc = _temp[:,None] * o_i, allow_tf32 = allow_tf32)
 
         # update max
         m_i = updated_max
@@ -140,25 +142,26 @@ def flash_fwd_kernel(
 def test():
     import random, time, math, tqdm
     random.seed(0)
-    torch.set_printoptions(precision=6)
+    torch.set_printoptions(precision=8)
 
     DEVICE = triton.runtime.driver.active.get_active_torch_device()
-    b = 2
-    seq = 128 * 128
+    b = 4
+    seq = 128 * 128 # * 128
     d_k = 64
     Q_TILE_SIZE = 128
     K_TILE_SIZE = 128
-    q = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
-    k = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
-    v = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
-    o = torch.empty(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
+    q = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float16).contiguous() 
+    k = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float16).contiguous() 
+    v = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float16).contiguous() 
+    o = torch.empty(size=(b,seq,d_k), device=DEVICE, dtype=torch.float16).contiguous()
     scale = 1 / math.sqrt(d_k)
-    l = torch.empty(size=(b,seq,), dtype=torch.float32, device=DEVICE).contiguous()
+    l = torch.empty(size=(b,seq,), dtype=torch.float16, device=DEVICE).contiguous()
+    steps = 1
     # --------------------------------------------------------------------------------
     start = time.time()
-    for _ in tqdm.tqdm(range(1024),
+    for _ in tqdm.tqdm(range(steps),
               desc="Loading",
-              total=1024,
+              total=steps,
               ascii=False,
               miniters=1,
               colour='green',
@@ -175,23 +178,24 @@ def test():
     print(f"triton_impl_t:",end-start)
     # --------------------------------------------------------------------------------
     start = time.time()
-    for _ in tqdm.tqdm(range(1024),
+    for _ in tqdm.tqdm(range(steps),
               desc="Loading",
-              total=1024,
+              total=steps,
               ascii=False,
               miniters=1,
               colour='green',
               dynamic_ncols=True): 
         S = q @ k.transpose(-2,-1) * scale
+        # print(f"S:\n{S}")
         A = S - torch.logsumexp(S,dim=-1,keepdim=True)
-        ref_o = (torch.exp(A) @ v).to(torch.float32)
+        ref_o = (torch.exp(A) @ v).to(torch.float16)
         torch.cuda.synchronize()
     end = time.time()
     print(f"pytorch_impl_t:",end-start)
     # --------------------------------------------------------------------------------
     print(f"o:\n{o.shape}")
     print(f"ref_o:\n{ref_o.shape}")
-    print(f"MSE(o, ref_o):\n{torch.square(o - ref_o).sum()}, SQ(o)={torch.square(o).sum()}, SQ(ref_o)={torch.square(ref_o).sum()}")
+    print(f"MSE(o, ref_o):{torch.square(o - ref_o).sum()}, SQ(o)={torch.square(o).sum()}, SQ(ref_o)={torch.square(ref_o).sum()}")
 
 
 def test_timing_flash_forward_backward():
