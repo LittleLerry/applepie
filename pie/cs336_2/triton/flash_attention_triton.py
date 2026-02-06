@@ -115,54 +115,80 @@ def flash_fwd_kernel(
     tl.store(L_block_ptr, L_i, boundary_check=(0,))
 
 def test():
-    import random
+    import random, time
     random.seed(0)
     DEVICE = triton.runtime.driver.active.get_active_torch_device()
-    b = 10
-    seq = 512
-    d_k = 512
-    Q_TILE_SIZE = 16
-    K_TILE_SIZE = 16
-    std = 2.0
-    mean = 3.0
+    b = 2
+    seq = 16384
+    d_k = 64
+    Q_TILE_SIZE = 128
+    K_TILE_SIZE = 128
     q = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
     k = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
     v = torch.randn(size=(b,seq,d_k), device=DEVICE, dtype=torch.float32).contiguous() 
     o = torch.empty(size=(b,seq,d_k), device=DEVICE, dtype=torch.float16).contiguous() 
-
-    v = v * std + mean
-
     scale = 1 / 4
     l = torch.empty(size=(b,seq,), dtype=torch.float32, device=DEVICE).contiguous()
 
     #print(f"q:\n{q}")
     #print(f"k:\n{k}")
     #print(f"v:\n{v}")
-    print(f"q @ k.transpose(-2,-1) * scale:\n{(q @ k.transpose(-2,-1) * scale).max(dim=-1)}")
+    # print(f"q @ k.transpose(-2,-1) * scale:\n{(q @ k.transpose(-2,-1) * scale).max(dim=-1)}")
+    start = time.time()
+    for _ in range(1000):
+        S = q @ k.transpose(-2,-1) * scale
+        A = S - torch.logsumexp(S,dim=-1,keepdim=True)
+        ref_o = (torch.exp(A) @ v).to(torch.float16)
+        torch.cuda.synchronize()
+    end = time.time()
+    print(f"pytorch_impl_t:",end-start)
 
-    S = q @ k.transpose(-2,-1) * scale
-    A = S - torch.logsumexp(S,dim=-1,keepdim=True)
-    ref_o = (torch.exp(A) @ v).to(torch.float16)
-
-    flash_fwd_kernel[(seq // Q_TILE_SIZE, b)](q,k,v,o,l,
+    start = time.time()
+    for _ in range(1000):
+        flash_fwd_kernel[(seq // Q_TILE_SIZE, b)](q,k,v,o,l,
                                               q.stride(0),q.stride(1),q.stride(2),
                                               k.stride(0),k.stride(1),k.stride(2),
                                               v.stride(0),v.stride(1),v.stride(2),
                                               o.stride(0),o.stride(1),o.stride(2),
                                               l.stride(0),l.stride(1),
                                               N_QUERIES=seq, N_KEYS=seq, scale=scale, D=d_k, Q_TILE_SIZE=Q_TILE_SIZE, K_TILE_SIZE=K_TILE_SIZE)
+        torch.cuda.synchronize()
+    end = time.time()
+    print(f"triton_impl_t:",end-start)
 
     print(f"o:\n{o.dtype}")
     print(f"ref_o:\n{ref_o.dtype}")
     print(f"MSE(o, ref_o):\n{torch.square(o - ref_o).sum()}")
-    print(f"AVG_SQER(o, ref_o):\n{torch.abs(o / ref_o - 1).mean()}")
+
+
+def test_timing_flash_forward_backward():
+    n_heads =16
+    d_head =64
+    sequence_length =16384
+    q, k, v =torch.randn(
+        3, n_heads, sequence_length, d_head,device='cuda', dtype=torch.bfloat16,requires_grad=True
+    )
+
+    flash = torch.compile(FlashAttention2.apply)
+    def flash_forward_backward():
+        o = flash(q, k, v, True)
+        loss = o.sum()
+        loss.backward()
+    
+    results = triton.testing.do_bench(flash_forward_backward, rep=10000, warmup=1000)
+    print(results)
+
 
 if __name__ == '__main__':
     test()
-
-
-
-
-
-
-
+    """
+    (train) ?@BMS-H800-WK-003:~/cs/assignment2-systems/flashattn$ python flash_attention_triton.py 
+    pytorch_impl_t: 12.770922899246216
+    triton_impl_t: 3.632474184036255
+    o:
+    torch.float16
+    ref_o:
+    torch.float16
+    MSE(o, ref_o):
+    0.064086914062
+    """
