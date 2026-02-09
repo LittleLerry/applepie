@@ -185,7 +185,7 @@ class flashattnTriton(torch.autograd.Function):
         if ctx.is_causal:
             n_queries = Q.shape[-2]
             n_keys = K.shape[-2]
-            S =torch.where(torch.arange(n_queries, device=S.device)[None, :, None] >= torch.arange(n_keys, device=S.device)[None, None, :], S, -1e6)
+            S =torch.where(torch.arange(n_queries, device=S.device)[None, :, None] >= torch.arange(n_keys, device=S.device)[None, None, :], S, float('-inf'))
 
         P = torch.exp(S - L.unsqueeze(-1))
         dV = P.transpose(-1,-2) @ grad_o
@@ -197,9 +197,3 @@ class flashattnTriton(torch.autograd.Function):
         # Accepts:  = dL / doutput
         # Return:   = dL / dinput
         return (dQ, dK, dV, None)
-
-
-
-
-
-
