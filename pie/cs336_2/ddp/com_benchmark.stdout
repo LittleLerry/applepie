@@ -1,0 +1,72 @@
+[rank0]: Avg time 4.7087669372558594e-05 sec. Datasize 1MB. Backend nccl. World_size 2
+[rank0]: Avg time 7.772445678710938e-05 sec. Datasize 9MB. Backend nccl. World_size 2
+[rank0]: Avg time 0.0003858804702758789 sec. Datasize 100MB. Backend nccl. World_size 2
+[rank0]: Avg time 0.0030220746994018555 sec. Datasize 900MB. Backend nccl. World_size 2
+[rank0]: Avg time 4.857778549194336e-05 sec. Datasize 1MB. Backend nccl. World_size 4
+[rank0]: Avg time 6.914138793945312e-05 sec. Datasize 9MB. Backend nccl. World_size 4
+[rank0]: Avg time 0.0002923011779785156 sec. Datasize 100MB. Backend nccl. World_size 4
+[rank0]: Avg time 0.0022125840187072754 sec. Datasize 900MB. Backend nccl. World_size 4
+[rank0]: Avg time 4.760424417327158e-05 sec. Datasize 1MB. Backend nccl. World_size 6
+[rank0]: Avg time 6.540616595884785e-05 sec. Datasize 9MB. Backend nccl. World_size 6
+[rank0]: Avg time 0.00020448367286007851 sec. Datasize 100MB. Backend nccl. World_size 6
+[rank0]: Avg time 0.0013884305953979492 sec. Datasize 900MB. Backend nccl. World_size 6
+[Gloo] Rank 0 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[Gloo] Rank 1 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[rank0]: Avg time 0.0004584789276123047 sec. Datasize 1MB. Backend gloo. World_size 2
+[Gloo] Rank 0 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[Gloo] Rank 1 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[rank0]: Avg time 0.003390192985534668 sec. Datasize 9MB. Backend gloo. World_size 2
+[Gloo] Rank 0 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[Gloo] Rank 1 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[rank0]: Avg time 0.04581296443939209 sec. Datasize 100MB. Backend gloo. World_size 2
+[Gloo] Rank 1 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[Gloo] Rank 0 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[rank0]: Avg time 0.38446950912475586 sec. Datasize 900MB. Backend gloo. World_size 2
+[Gloo] Rank 0 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 1 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 2 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 3 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[rank0]: Avg time 0.0007431507110595703 sec. Datasize 1MB. Backend gloo. World_size 4
+[Gloo] Rank 0 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 2 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 1 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 3 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[rank0]: Avg time 0.0038893818855285645 sec. Datasize 9MB. Backend gloo. World_size 4
+[Gloo] Rank 0 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 1 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 2 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 3 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[rank0]: Avg time 0.052521705627441406 sec. Datasize 100MB. Backend gloo. World_size 4
+[Gloo] Rank 1 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 0 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 2 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[Gloo] Rank 3 is connected to 3 peer ranks. Expected number of connected peer ranks is : 3
+[rank0]: Avg time 0.6243345737457275 sec. Datasize 900MB. Backend gloo. World_size 4
+[Gloo] Rank 1 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 0 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 4 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 2 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 3 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 5 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[rank0]: Avg time 0.0009970268001779914 sec. Datasize 1MB. Backend gloo. World_size 6
+[Gloo] Rank 0 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 1 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 2 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 4 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 3 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 5 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[rank0]: Avg time 0.0044445195235311985 sec. Datasize 9MB. Backend gloo. World_size 6
+[Gloo] Rank 0 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 1 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 4 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 2 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 3 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 5 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[rank0]: Avg time 0.059568602591753006 sec. Datasize 100MB. Backend gloo. World_size 6
+[Gloo] Rank 4 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 5 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 0 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 1 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 2 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[Gloo] Rank 3 is connected to 5 peer ranks. Expected number of connected peer ranks is : 5
+[rank0]: Avg time 1.0880481004714966 sec. Datasize 900MB. Backend gloo. World_size 6
