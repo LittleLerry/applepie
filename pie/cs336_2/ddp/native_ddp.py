@@ -123,4 +123,4 @@ if __name__ == "__main__":
     for param_a, param_b in zip(model.parameters(), ref_model.parameters()):
         abs_sum_error += torch.abs(param_a.data - param_b.data).sum()
     print("relative abs error:"+str(abs_sum_error/ sum(p.numel() for p in model.parameters())))
-    #
+    # relative abs error:tensor(0.0002, device='cuda:0')
