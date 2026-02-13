@@ -1,0 +1,7 @@
+avg_format_reward = 0.5799848369977255
+avg_answer_reward = 0.19257012888551933
+avg_reward = 0.19257012888551933
+f1a1 = 254
+f1a0 = 511
+f1a0 = 0
+f0a0 = 554
