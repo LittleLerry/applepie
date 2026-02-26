@@ -15,12 +15,16 @@ Originally, I considered this task to be relatively straightforward, and it appe
 However, when scaling to eight GPUs, some optimizations were necessary to achieve improved training performance.
 
 In the context of the original dataset, it was observed that employing list indexing within the __getitem__ method resulted in 
-underutilization of the eight GPUs. They are starving.
+underutilization of the eight GPUs. They are starving. It is also advisable to increase the number of workers in the DataLoader. 
+Pre-caching the dataset in advance and deserializing it during training proved to be an effective approach. 
 
-It is also advisable to increase the number of workers in the DataLoader. Pre-caching the dataset 
-in advance and deserializing it during training proved to be an effective approach. 
+Furthermore, the training process demonstrated a degree of increased instability compared to the single-GPU configuration. (probaly b_s) Initially, 
+there was speculation that the my ddp training contains bugs. However, after several hours of investigation, it was
+determined that the issue was related to batch size configuration. Specifically, setting #GPU = 1 with a batch size of 64 and
+#GPU = 8 with a batch size of 8 yielded successful results (verified at checkpoint 9). This finding suggests that increasing the
+batch size does not necessarily lead to better performance.
 
-Furthermore, the training process demonstrated a degree of increased instability compared to the single-GPU configuration.
+请不要带我走(★ ω ★)~~~~~~~~~
 
 """
 # um_workers=3, no list etc
@@ -103,14 +107,14 @@ class vqvae(nn.Module):
 
 def train(rank, world_size, conf):
     # init cluster
-    setup(rank, world_size, "nccl")
-    if (rank == 0):
-        print("Cluster inited.")
-    
     local_rank = rank # single node
     torch.cuda.set_device(local_rank)
 
-    device = torch.device(f"cuda:{local_rank}")
+    setup(rank, world_size, "nccl")
+    if (rank == 0):
+        print("Cluster inited.")
+
+    device = torch.device("cuda", local_rank)
     epoch = conf["epoch"]
     beta = conf["beta"]
     gamma = conf["gamma"]
@@ -123,25 +127,24 @@ def train(rank, world_size, conf):
     _t = conf["_t"]
     _e = conf["_t"]
     
-
-    model = vqvae(vocab_size, d_model, input_channels).to(device)
-    ddp_model = DDP(model, device_ids=[local_rank])
+    ddp_model = DDP(vqvae(vocab_size, d_model, input_channels).to(device), device_ids=[local_rank], output_device=local_rank) #?
 
     # shit code, each will process, FIX later
     train_dataset = celeba_hqr(_t)
     eval_dataset = celeba_hqr(_e)
     dist.barrier()
-
+ 
     if(rank == 0):
         print("Processed all images for all ranks")
 
-    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler, num_workers=3)
+    
+    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler, num_workers=3, shuffle=(train_sampler is None))
 
-    eval_sampler = DistributedSampler(eval_dataset, num_replicas=world_size, rank=rank, shuffle=True)
-    eval_dataloader = DataLoader(eval_dataset, batch_size=batch_size, sampler=eval_sampler, num_workers=3)
+    eval_sampler = DistributedSampler(eval_dataset, num_replicas=world_size, rank=rank)
+    eval_dataloader = DataLoader(eval_dataset, batch_size=batch_size, sampler=eval_sampler, num_workers=3, shuffle=(eval_sampler is None))
 
-    opt = torch.optim.AdamW(ddp_model.parameters(), lr=1e-3)
+    opt = torch.optim.AdamW(ddp_model.parameters(), lr=3e-4) # 1/math.sqrt(8) * 1e-3
 
     criterion = nn.MSELoss()
 
@@ -149,7 +152,10 @@ def train(rank, world_size, conf):
         print("Entry training loop")
     ddp_model.train()
     for e in range(epoch):
+        # ?
+        train_sampler.set_epoch(e)
         for idx, images in enumerate(train_dataloader):
+
             input = images.to(device)
             z, z_q, _x = ddp_model(input)
             
@@ -166,7 +172,7 @@ def train(rank, world_size, conf):
         # calc eval loss
         # it turns out that this step it quite bad
         with torch.inference_mode():
-            if ((e) % 10== 0):
+            if False:
                 total_re_loss = torch.tensor(0.0).to(device)
                 total_loss = torch.tensor(0.0).to(device)
                 num_images = torch.tensor(0).to(device)
@@ -194,8 +200,12 @@ def train(rank, world_size, conf):
         # save samplings
         with torch.inference_mode():
             # sampling a batch of images
-            if ((e) % 10== 0) and (rank == 0):
-                print("Output images")
+            if ((e+1) % 16 == 0) and (rank == 0):
+                # save check point
+                torch.save(ddp_model.module.state_dict(), "./ckpt/epoch{e}_c.pt")
+
+                eval_sampler.set_epoch(e)
+                # sampling
                 for idx, images in enumerate(eval_dataloader):
                     input = images.to(device)
                     _, _, _x = ddp_model(input)
@@ -206,10 +216,6 @@ def train(rank, world_size, conf):
                     break
         dist.barrier()
 
-    # save models
-    if rank == 0:
-        torch.save(ddp_model.module.state_dict(), "./checkpoint.pt")
-        print("Training finished. Checkpoint saved.")
     cleanup()
 
 def init_dataset_cache(root_dir, width, cache_file_name):
@@ -255,10 +261,10 @@ if __name__ == '__main__':
         "gamma" : 0.25,
         "eval_output_dir" : "./output",
         "d_model" : 256,
-        "batch_size" : 64,
-        "vocab_size" : 128,
+        "batch_size" : 8,
+        "vocab_size" : 512,
         "input_channels": 3,
-        "width": 256,
+        "width": 128,
         "train_data_path" : "./celeba_hqr/train",
         "eval_data_path" : "./celeba_hqr/eval",
         "_t" : "./t.pt",
