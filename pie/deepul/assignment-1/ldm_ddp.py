@@ -1,5 +1,8 @@
 # latant diffusion model use vq-vae in celeha-hqr dataset
+"""
+implmente the arch is simple, but the hyperpara turning can be shit. 
 
+"""
 import torch
 import torch.nn as nn
 import random
@@ -53,8 +56,8 @@ def save_tensor_to_image(tensor, save_path, image_name):
 class MLP(nn.Module):
     def __init__(self, in_features, out_features):
         super().__init__()
-        self.l1 = nn.Linear(in_features, out_features)
-        self.l2 = nn.Linear(out_features, out_features)
+        self.l1 = nn.Linear(in_features, 2 * out_features)
+        self.l2 = nn.Linear(2 * out_features, out_features)
         self.silu = nn.SiLU()
     def forward(self, x):
         # (, d_ty) -> (, d_channel)
@@ -123,15 +126,21 @@ class decoder(nn.Module):
         return x
 
 class Unet(nn.Module):
-    def __init__(self, input_channel, d_model, empty_condition_rate, num_conditions, ):
+    def __init__(self, input_channel, d_model, empty_condition_rate, num_conditions, total_steps):
         super().__init__()
 
         # t is float within range [0,1]
         # y is label here (also can be other domain experts' output embeddings like CLIP's output)
-        self.emd_t_size = 16
-        self.emd_t = nn.Linear(1, self.emd_t_size)
+        
+        # self.emd_t_size = 16
+        # self.emd_t = nn.Linear(1, self.emd_t_size) # may cause issue here
 
-        self.emd_y_size = 128
+
+        self.emd_t_size = 512
+        self.emd_t = nn.Embedding(total_steps, self.emd_t_size)
+        self.total_steps = total_steps
+
+        self.emd_y_size = 512
         assert num_conditions >= 0
         self.y_range = num_conditions
         self.emd_y = nn.Embedding(num_conditions + 1, self.emd_y_size)
@@ -152,9 +161,11 @@ class Unet(nn.Module):
     
     def forward(self, input, timestamp, condition):
         # input (*, C, H, W)
-        # timestamp (*, 1) -> (*, d_t)
+        # timestamp (*) -> (*, d_t)
         # condition (*) -> (*, d_y)
         # assert for all condition < self.y_range
+
+        timestamp = torch.round(timestamp * self.total_steps).clamp(0, self.total_steps -1).to(device=input.device, dtype=torch.int64)
         t = self.emd_t(timestamp) # (*, d_t)
 
         # replace with empty condition randomly
@@ -197,7 +208,7 @@ def train(rank, conf):
     batch_size = conf["batch_size"]
     epoch = conf["epoch"]
     lr = conf["lr"]
-    eval_epoch_interval = conf["eval_epoch_interval"]
+    # eval_epoch_interval = conf["eval_epoch_interval"]
     sample_epoch_interval = conf["sample_epoch_interval"] 
     num_samples = conf["num_samples_per_gpu"]
     width = conf["width"]
@@ -207,27 +218,27 @@ def train(rank, conf):
     sampling_output_dir = conf["sampling_output_dir"]
 
     # init model etc.
-    ddp_model = DDP(Unet(channels, d_model, empty_rate, num_labels).to(device), device_ids=[local_rank], output_device=local_rank)
+    ddp_model = DDP(Unet(channels, d_model, empty_rate, num_labels, steps).to(device), device_ids=[local_rank], output_device=local_rank)
     empty_token_id = num_labels # list int: [0,1,...,num_labels-1, num_labels], where num_labels is id indicates that it is empty condition
 
     train_dataset = celeba_hqr(train_data)
-    eval_dataset = celeba_hqr(eval_data)
+    # eval_dataset = celeba_hqr(eval_data)
 
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler, num_workers=3, shuffle=(train_sampler is None))
 
-    eval_sampler = DistributedSampler(eval_dataset, num_replicas=world_size, rank=rank)
-    eval_dataloader = DataLoader(eval_dataset, batch_size=batch_size, sampler=eval_sampler, num_workers=3, shuffle=(eval_sampler is None))
+    # eval_sampler = DistributedSampler(eval_dataset, num_replicas=world_size, rank=rank)
+    # eval_dataloader = DataLoader(eval_dataset, batch_size=batch_size, sampler=eval_sampler, num_workers=3, shuffle=(eval_sampler is None))
 
     opt = torch.optim.AdamW(ddp_model.parameters(), lr=lr)
     slr = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epoch)
-    criterion = nn.MSELoss()
+    criterion = nn.MSELoss(reduction='none')
 
     # training
     if(rank == 0):
         print("entry training loop")
     ddp_model.train()
-    torch.manual_seed(rank + 2026)
+    
 
     for e in range(epoch):
         train_sampler.set_epoch(e)
@@ -235,10 +246,11 @@ def train(rank, conf):
             #=========Classifier-free guidance training for Gaussian probability=========
             shape = images.shape[:-3] # (*, )
             z, y = images.to(device), labels.to(device) # (*, C, H, W) and (*,)
-            t = torch.rand(size=(*shape,1), device=device) # (*, 1)
+
+            t = torch.rand(size=shape, device=device) # (*, )
             noise = torch.randn_like(z, device=device) # (*, C, H, W)
             
-            alpha_t = t.unsqueeze(-1).unsqueeze(-1) # (*, 1, 1, 1)
+            alpha_t = t.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) # (*, 1, 1, 1)
             beta_t = 1 - alpha_t # (*, 1, 1, 1)
             dalpha_t = torch.ones_like(alpha_t, device=device) * 1.0 # (*, 1, 1, 1)
             dbeta_t = torch.ones_like(alpha_t, device=device) * -1.0 # (*, 1, 1, 1)
@@ -246,7 +258,9 @@ def train(rank, conf):
             x = alpha_t * z + beta_t * noise
 
             # input, timestamp, condition
-            loss = criterion(ddp_model(x, t, y) , (dalpha_t * noise + dbeta_t * z))
+
+            loss = criterion(ddp_model(x, t, y) , (dalpha_t * noise + dbeta_t * z)).view(*shape, -1).sum(-1).mean() # critial! 
+            
             loss.backward()
             opt.step()
             opt.zero_grad()
@@ -254,52 +268,26 @@ def train(rank, conf):
             dist.reduce(loss, 0)
             if (rank == 0):
                 print(f"epoch {e}, step {idx}, avg_loss {loss / world_size}")
-        # eval
-        if ((e + 1) % eval_epoch_interval == 0):
-            with torch.inference_mode():
-                total_loss = torch.tensor(0.0, device=device)
-                num_images = torch.tensor(0, device=device)
 
-                for _, (images, labels) in enumerate(eval_dataloader):
-                    shape = images.shape[:-3]
-                    z, y = images.to(device), labels.to(device)
-                    t = torch.rand(size=(*shape,1), device=device) # (*, 1)
-                    noise = torch.randn_like(z, device=device) # (*, C, H, W)
-            
-                    alpha_t = t.unsqueeze(-1).unsqueeze(-1) # (*, 1, 1, 1)
-                    beta_t = 1 - alpha_t # (*, 1, 1, 1)
-                    dalpha_t = torch.ones_like(alpha_t, device=device) * 1.0 # (*, 1, 1, 1)
-                    dbeta_t = torch.ones_like(alpha_t, device=device) * -1.0 # (*, 1, 1, 1)
-
-                    x = alpha_t * z + beta_t * noise
-
-                    loss = criterion(ddp_model(x, t, y) , (dalpha_t * noise + dbeta_t * z))
-
-                    total_loss += loss * num_images
-                    num_images += torch.tensor(shape, device=device).prod()
-                
-                avg_loss = total_loss / num_images
-                dist.reduce(avg_loss, 0)
-                if rank == 0:
-                    print(f"epoch {e}, loss {avg_loss / world_size}")
         # sampling
-        if ((e + 1) % sample_epoch_interval == 0):
+        if ((e) % sample_epoch_interval == 0):
             with torch.inference_mode():
                 """
                 def forward(self, input, timestamp, condition):
                 # input (*, C, H, W)
-                # timestamp (*, 1) -> (*, d_t)
+                # timestamp (*) -> (*, d_t)
                 # condition (*) -> (*, d_y)
                 # assert for all condition < self.y_range
                 """
-                t = torch.zeros(size=(num_samples, 1), device=device)
+                t = torch.zeros(size=(num_samples,), device=device, dtype=torch.int64) # timestamps
                 h = 1 / steps
                 samplings = torch.randn(size=(num_samples, channels, width, width), device=device)
                 
-                y = torch.zeros(size=(num_samples,), device=device, dtype=torch.int32) # 0 labels
+                y = torch.zeros(size=(num_samples,), device=device, dtype=torch.int64) # 0 labels
 
-                empty_y = torch.zeros(size=(num_samples,), device=device, dtype=torch.int32) + empty_token_id
+                empty_y = torch.zeros(size=(num_samples,), device=device, dtype=torch.int64) + empty_token_id
 
+                # simulation can takes at different acc, here we use same acc as training
                 for _ in range(steps):
                     u_empty = ddp_model(samplings, t, empty_y) # (*, C, H, W)
                     u = ddp_model(samplings, t, y) # (*, C, H, W)
@@ -322,7 +310,7 @@ def train(rank, conf):
                     for i in range(result.shape[0]):
                         save_tensor_to_image(result[0], sampling_output_dir+f"/epoch{e}", f"{i}_{l[i]}.png")
         # save
-        if ((e + 1) % save_epoch_interval == 0) and (rank == 0):
+        if ((e) % save_epoch_interval == 0) and (rank == 0):
             torch.save(ddp_model.module.state_dict(), f"./models/{e}.pt")
         slr.step()
         dist.barrier()
@@ -361,13 +349,21 @@ def init_dataset_cache(root_dir, width, cache_file_name):
     print("writing cache")
     torch.save(stacked_tensor, cache_file_name)
 
-if __name__ == '__main__':
-    # nvidia only
-    if not torch.cuda.is_available():
-        print("Fuck.")
-        exit(0)
+def get_conf():
+    """
+    (width, total_batch_size, d_model, lr) = (256, 64, 128, 8e-4) after ??? epoches with loss ~= ???
+    (width, total_batch_size, d_model, lr) = (256, 128, 128, 8e-4) after ??? epoches with loss ~= ???
+    (width, total_batch_size, d_model, lr) = (256, 128, 128, 4e-4) after ??? epoches with loss ~= ???
 
-    # necessary confs
+    (width, total_batch_size, d_model, lr) = (256, 64, 256, 8e-4) after ??? epoches with loss ~= ???
+    (width, total_batch_size, d_model, lr) = (256, 128, 256, 1e-4) after ??? epoches with loss ~= ???
+    (width, total_batch_size, d_model, lr) = (256, 128, 512, 1e-4) after ??? epoches with loss ~= ??? *****
+
+    (width, total_batch_size, d_model, lr) = (64, 64, 512, 4e-4) after ??? epoches with loss ~= ???
+
+    (width, total_batch_size, d_model, lr) = (256, 128, 256, 8e-4) after ??? epoches with loss ~= ???
+    """
+
     conf = {
         "train_data_path": "./celeba_hqr/train",
         "eval_data_path" : "./celeba_hqr/eval",
@@ -375,21 +371,33 @@ if __name__ == '__main__':
         "train_cache" : "./t.pt",
         "eval_cache" : "./e.pt",
         "batch_size" :8,
-        "d_model": 128,
+        "d_model": 512,
         "empty_rate":0.1,
         "num_labels":0,
         "channels": 3,
         "epoch": 256,
-        "lr": 8e-4,
+        "lr": 1e-4,
         "eval_epoch_interval" : 16,
         "sample_epoch_interval" : 16,
         "save_epoch_interval": 16,
         "num_samples_per_gpu": 2,
-        "steps": 128,
+        "steps": 256,
         "guidance_scale": 1.0,
         "sampling_output_dir": "./ldm_output",
         "world_size": 8,
     }
+    return conf
+
+
+
+if __name__ == '__main__':
+    # nvidia only
+    if not torch.cuda.is_available():
+        print("Fuck.")
+        exit(0)
+
+    # necessary confs
+    conf = get_conf()
 
     # preparing dataset
     init_dataset_cache(conf["train_data_path"], conf["width"], conf["train_cache"])
