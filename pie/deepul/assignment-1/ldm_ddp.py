@@ -227,6 +227,8 @@ def train(rank, conf):
     if(rank == 0):
         print("entry training loop")
     ddp_model.train()
+    torch.manual_seed(rank + 2026)
+
     for e in range(epoch):
         train_sampler.set_epoch(e)
         for idx, (images, labels) in enumerate(train_dataloader):
@@ -253,7 +255,7 @@ def train(rank, conf):
             if (rank == 0):
                 print(f"epoch {e}, step {idx}, avg_loss {loss / world_size}")
         # eval
-        if ((e+1) % eval_epoch_interval == 0):
+        if ((e + 1) % eval_epoch_interval == 0):
             with torch.inference_mode():
                 total_loss = torch.tensor(0.0, device=device)
                 num_images = torch.tensor(0, device=device)
@@ -281,7 +283,7 @@ def train(rank, conf):
                 if rank == 0:
                     print(f"epoch {e}, loss {avg_loss / world_size}")
         # sampling
-        if ((e+1) % sample_epoch_interval == 0):
+        if ((e + 1) % sample_epoch_interval == 0):
             with torch.inference_mode():
                 """
                 def forward(self, input, timestamp, condition):
@@ -294,9 +296,9 @@ def train(rank, conf):
                 h = 1 / steps
                 samplings = torch.randn(size=(num_samples, channels, width, width), device=device)
                 
-                y = torch.zeros(size=(num_samples,), device=device) # 0 labels
+                y = torch.zeros(size=(num_samples,), device=device, dtype=torch.int32) # 0 labels
 
-                empty_y = torch.full(samplings.shape, empty_token_id, device=device)
+                empty_y = torch.zeros(size=(num_samples,), device=device, dtype=torch.int32) + empty_token_id
 
                 for _ in range(steps):
                     u_empty = ddp_model(samplings, t, empty_y) # (*, C, H, W)
@@ -307,15 +309,20 @@ def train(rank, conf):
                 # collecting results
                 if rank == 0:
                     gather_list = [torch.zeros_like(samplings, device=device) for _ in range(world_size)]
+                    label_list = [torch.zeros_like(y, device=device) for _ in range(world_size)]
                 else:
                     gather_list = None
+                    label_list= None
                 dist.gather(samplings, gather_list, dst=0)
+                dist.gather(y, label_list, dst=0)
+
                 if rank == 0:
                     result = torch.cat(gather_list, dim=0)
+                    l = torch.cat(label_list, dim=0)
                     for i in range(result.shape[0]):
-                        save_tensor_to_image(result[0], sampling_output_dir+f"/epoch{e}", f"{i}.png")
+                        save_tensor_to_image(result[0], sampling_output_dir+f"/epoch{e}", f"{i}_{l[i]}.png")
         # save
-        if ((e+1) % save_epoch_interval == 0) and (rank == 0):
+        if ((e + 1) % save_epoch_interval == 0) and (rank == 0):
             torch.save(ddp_model.module.state_dict(), f"./models/{e}.pt")
         slr.step()
         dist.barrier()
