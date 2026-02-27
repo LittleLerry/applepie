@@ -16,17 +16,40 @@ However, when scaling to eight GPUs, some optimizations were necessary to achiev
 
 In the context of the original dataset, it was observed that employing list indexing within the __getitem__ method resulted in 
 underutilization of the eight GPUs. They are starving. It is also advisable to increase the number of workers in the DataLoader. 
-Pre-caching the dataset in advance and deserializing it during training proved to be an effective approach. 
+Pre-caching the dataset in advance and deserializing it during training proved to be an effective approach. Furthermore, the training process 
+demonstrated a degree of increased instability compared to the single-GPU configuration. (probaly b_s) Initially, there was speculation that 
+the my ddp training contains bugs. However, after several hours of investigation, it was determined that the issue was related to batch 
+size configuration. Specifically, setting #GPU = 1 with a batch size of 64 and #GPU = 8 with a batch size of 8 yielded successful 
+results (verified at checkpoint 9). This finding suggests that increasing the batch size does not necessarily lead to better performance. 
+Overall, the summary is as follows:
 
-Furthermore, the training process demonstrated a degree of increased instability compared to the single-GPU configuration. (probaly b_s) Initially, 
-there was speculation that the my ddp training contains bugs. However, after several hours of investigation, it was
-determined that the issue was related to batch size configuration. Specifically, setting #GPU = 1 with a batch size of 64 and
-#GPU = 8 with a batch size of 8 yielded successful results (verified at checkpoint 9). This finding suggests that increasing the
-batch size does not necessarily lead to better performance.
+- d_model: 128 is sufficient; larger sizes unnecessary and yielding worse result. This may due to the constrained features (faces only) in the dataset.
+- Encoder/Decoder: Scale down accordingly to 128.
+- vocab_size: Determines output detail—choose based on desired granularity. 128-256 will be fine.
+- width: Should align with vocabulary size (higher resolution supports more detailed outputs).
+- Batch size: Must be <=16; otherwise causes severe performance degradation.
+- lr: Needs to be relatively large to compensate for small batch size and model capacity. (4e-4 ~ 1e-3).
 
-请不要带我走(★ ω ★)~~~~~~~~~
+# GPU=8, micro_batch_size=8, (d_model, vocab_size, width) = (128, 128, 128), trained on 27000 128*128 pictures with 128 epoches, lr=1e-3: loss ~= 0.010
+# GPU=8, micro_batch_size=8, (d_model, vocab_size, width) = (128, 256, 256), trained on 27000 256 * 256 pictures with 128 epoches, lr=1e-3: loss ~= 0.013 [*]
+# GPU=8, micro_batch_size=8, (d_model, vocab_size, width) = (256, 256, 256), trained on 27000 256 * 256 pictures with 128 epoches, lr=1e-3: loss ~= 0.080
+# GPU=8, micro_batch_size=8, (d_model, vocab_size, width) = (256, 256, 256), trained on 27000 256 * 256 pictures with 128 epoches, lr=4e-4: loss ~= 0.080
+# GPU=8, micro_batch_size=16, (d_model, vocab_size, width) = (256, 256, 256), trained on 27000 256 * 256 pictures with 128 epoches, lr=4e-4: loss ~= 0.030
+# GPU=8, micro_batch_size=32, (d_model, vocab_size, width) = (256, 256, 256), trained on 27000 256 * 256 pictures with 128 epoches, lr=4e-4: loss ~= 0.045
+# GPU=8, micro_batch_size=32, (d_model, vocab_size, width) = (256, 512, 128), trained on 190000 128*128 pictures with 64 epoches, bad result loss ~= 0.030
+# GPU=8, micro_batch_size=8, (d_model, vocab_size, width) = (512, 512, 128), trained on 190000 128*128 pictures with 100 epoches, bad result loss ~= 0.070
+
+
+
+~~~~~~~偏偏念你生生别离~(●'◡'●) 
 
 """
+
+_dataset_hack = False
+_dataset_hack_dupilcation = 3
+
+
+
 # um_workers=3, no list etc
 def setup(rank, world_size, backend):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -41,11 +64,17 @@ class celeba_hqr(Dataset):
     def __init__(self, cache_file_name):
         assert os.path.exists(cache_file_name)
         self.data = torch.load(cache_file_name, weights_only=True)
+        self.l = len(self.data)
 
     def __len__(self):
-        return len(self.data)
+        if _dataset_hack:
+            return self.l * _dataset_hack_dupilcation
+        else:
+            return self.l
     
     def __getitem__(self, idx):
+        if _dataset_hack:
+            idx = idx % _dataset_hack_dupilcation
         return self.data[idx] # (C, H, W)
     
 # AI generated code
@@ -144,15 +173,16 @@ def train(rank, world_size, conf):
     eval_sampler = DistributedSampler(eval_dataset, num_replicas=world_size, rank=rank)
     eval_dataloader = DataLoader(eval_dataset, batch_size=batch_size, sampler=eval_sampler, num_workers=3, shuffle=(eval_sampler is None))
 
-    opt = torch.optim.AdamW(ddp_model.parameters(), lr=3e-4) # 1/math.sqrt(8) * 1e-3
-
+    opt = torch.optim.AdamW(ddp_model.parameters(), lr=8e-4) # 1/math.sqrt(8) * 1e-3
+    slr = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epoch)
     criterion = nn.MSELoss()
 
     if(rank == 0):
         print("Entry training loop")
     ddp_model.train()
+
     for e in range(epoch):
-        # ?
+        # train
         train_sampler.set_epoch(e)
         for idx, images in enumerate(train_dataloader):
 
@@ -167,12 +197,11 @@ def train(rank, world_size, conf):
             dist.reduce(loss, 0)
             if (rank == 0):
                 print(f"epoch {e}, step {idx}, avg_loss {loss / world_size}")
-        
         dist.barrier()
-        # calc eval loss
-        # it turns out that this step it quite bad
+
+        # eval
         with torch.inference_mode():
-            if False:
+            if ((e+1) % 16 == 0):
                 total_re_loss = torch.tensor(0.0).to(device)
                 total_loss = torch.tensor(0.0).to(device)
                 num_images = torch.tensor(0).to(device)
@@ -197,12 +226,12 @@ def train(rank, world_size, conf):
                 if rank == 0:
                     print(f"epoch {e}, reconstruction loss {total_re_loss / world_size}, loss {total_loss / world_size}")
 
-        # save samplings
+        # sampling
         with torch.inference_mode():
             # sampling a batch of images
             if ((e+1) % 16 == 0) and (rank == 0):
                 # save check point
-                torch.save(ddp_model.module.state_dict(), "./ckpt/epoch{e}_c.pt")
+                torch.save(ddp_model.module.state_dict(), f"./ckpt/{e}.pt")
 
                 eval_sampler.set_epoch(e)
                 # sampling
@@ -211,9 +240,10 @@ def train(rank, world_size, conf):
                     _, _, _x = ddp_model(input)
 
                     for i in range(images.shape[0]):
-                        save_tensor_to_image(images[i], eval_output_dir+f"/epoch{e}", f"{i}_original.png")
-                        save_tensor_to_image(_x[i], eval_output_dir+f"/epoch{e}", f"{i}_decoded.png")
+                        save_tensor_to_image(images[i], eval_output_dir+f"/epoch{e}", f"{i}_E0.png")
+                        save_tensor_to_image(_x[i], eval_output_dir+f"/epoch{e}", f"{i}_E1.png")
                     break
+        slr.step()
         dist.barrier()
 
     cleanup()
@@ -256,15 +286,15 @@ if __name__ == '__main__':
         exit(0)
     world_size = 8
     conf = {
-        "epoch" : 256,
+        "epoch" : 192,
         "beta" : 1.0,
         "gamma" : 0.25,
         "eval_output_dir" : "./output",
-        "d_model" : 256,
+        "d_model" : 128,
         "batch_size" : 8,
-        "vocab_size" : 512,
+        "vocab_size" : 256,
         "input_channels": 3,
-        "width": 128,
+        "width": 256,
         "train_data_path" : "./celeba_hqr/train",
         "eval_data_path" : "./celeba_hqr/eval",
         "_t" : "./t.pt",
