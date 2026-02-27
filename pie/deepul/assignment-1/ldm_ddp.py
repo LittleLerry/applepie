@@ -255,11 +255,9 @@ def train(rank, conf):
             dalpha_t = torch.ones_like(alpha_t, device=device) * 1.0 # (*, 1, 1, 1)
             dbeta_t = torch.ones_like(alpha_t, device=device) * -1.0 # (*, 1, 1, 1)
 
-            x = alpha_t * z + beta_t * noise
-
             # input, timestamp, condition
 
-            loss = criterion(ddp_model(x, t, y) , (dalpha_t * noise + dbeta_t * z)).view(*shape, -1).sum(-1).mean() # critial! 
+            loss = criterion(ddp_model(alpha_t * z + beta_t * noise, t, y) , (dalpha_t * z + dbeta_t * noise)).view(*shape, -1).sum(-1).mean() # critial! 
             
             loss.backward()
             opt.step()
@@ -308,7 +306,7 @@ def train(rank, conf):
                     result = torch.cat(gather_list, dim=0)
                     l = torch.cat(label_list, dim=0)
                     for i in range(result.shape[0]):
-                        save_tensor_to_image(result[0], sampling_output_dir+f"/epoch{e}", f"{i}_{l[i]}.png")
+                        save_tensor_to_image(result[i], sampling_output_dir+f"/epoch{e}", f"{i}_{l[i]}.png")
         # save
         if ((e) % save_epoch_interval == 0) and (rank == 0):
             torch.save(ddp_model.module.state_dict(), f"./models/{e}.pt")
