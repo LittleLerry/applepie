@@ -137,7 +137,7 @@ class Unet(nn.Module):
 
 
         self.emd_t_size = 512
-        self.emd_t = nn.Embedding(total_steps, self.emd_t_size)
+        self.emd_t = nn.Embedding(total_steps + 1, self.emd_t_size) # [0, ..., total_steps]
         self.total_steps = total_steps
 
         self.emd_y_size = 512
@@ -165,7 +165,7 @@ class Unet(nn.Module):
         # condition (*) -> (*, d_y)
         # assert for all condition < self.y_range
 
-        timestamp = torch.round(timestamp * self.total_steps).clamp(0, self.total_steps -1).to(device=input.device, dtype=torch.int64)
+        timestamp = torch.round(timestamp * self.total_steps).clamp(0, self.total_steps).to(device=input.device, dtype=torch.int64)
         t = self.emd_t(timestamp) # (*, d_t)
 
         # replace with empty condition randomly
@@ -216,6 +216,7 @@ def train(rank, conf):
     guidance_scale = conf["guidance_scale"]
     save_epoch_interval = conf["save_epoch_interval"]
     sampling_output_dir = conf["sampling_output_dir"]
+    inference_steps = conf["inference_steps"]
 
     # init model etc.
     ddp_model = DDP(Unet(channels, d_model, empty_rate, num_labels, steps).to(device), device_ids=[local_rank], output_device=local_rank)
@@ -270,23 +271,15 @@ def train(rank, conf):
         # sampling
         if ((e) % sample_epoch_interval == 0):
             with torch.inference_mode():
-                """
-                def forward(self, input, timestamp, condition):
-                # input (*, C, H, W)
-                # timestamp (*) -> (*, d_t)
-                # condition (*) -> (*, d_y)
-                # assert for all condition < self.y_range
-                """
                 t = torch.zeros(size=(num_samples,), device=device, dtype=torch.int64) # timestamps
-                h = 1 / steps
+                h = 1 / inference_steps
                 samplings = torch.randn(size=(num_samples, channels, width, width), device=device)
-                
                 y = torch.zeros(size=(num_samples,), device=device, dtype=torch.int64) # 0 labels
 
                 empty_y = torch.zeros(size=(num_samples,), device=device, dtype=torch.int64) + empty_token_id
 
                 # simulation can takes at different acc, here we use same acc as training
-                for _ in range(steps):
+                for _ in range(inference_steps):
                     u_empty = ddp_model(samplings, t, empty_y) # (*, C, H, W)
                     u = ddp_model(samplings, t, y) # (*, C, H, W)
                     u_hat = (1 - guidance_scale) * u_empty + guidance_scale * u
@@ -383,6 +376,7 @@ def get_conf():
         "guidance_scale": 1.0,
         "sampling_output_dir": "./ldm_output",
         "world_size": 8,
+        "inference_steps": 256,
     }
     return conf
 
