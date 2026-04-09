@@ -153,8 +153,6 @@ def task(rank: int, seed:int, chunkXs: list[int], chunkZs: list[int], half_gs: i
     
     # print("putting result json file")
     # We only want to find 5*5 full of slime chunks
-    if val < (gs * gs):
-        return
     
     with open(os.path.join(".", f"_{rank}_result.json"), "w") as f:
         json.dump((cur_x, cur_z, cur_max), f)
@@ -169,7 +167,7 @@ if __name__ == "__main__":
     parser.add_argument('--search_range_x_end', type=int, default= 1875000)
     parser.add_argument('--search_range_z_start', type=int, default= -1875000)
     parser.add_argument('--search_range_z_end', type=int, default= 1875000)
-    parser.add_argument('--seed', type=int, default = 0)
+    parser.add_argument('--seed', type=int, default = 2026)
     parser.add_argument('--patch_size', type=int, default= 32767)
     parser.add_argument('--gs', type=int, default= 8)
     
@@ -195,7 +193,7 @@ if __name__ == "__main__":
     print(f"There are total {len(all_chunkx)} patches, each patch is of size {patch_size}x{patch_size} chunks.")
     num_processes = args.num_proc
 
-    max_itr = 512
+    max_itr = 1
 
     for epoch in range(max_itr):
         print(f"epoch {epoch}: launching {num_processes} cuda processes with seed {args.seed + epoch}")
